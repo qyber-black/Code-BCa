@@ -1,17 +1,16 @@
 # bca/unet.py - UNet models
 #
-# SPDX-FileCopyrightText: Copyright (C) 2022-2023 Frank C Langbein <frank@langbein.org>, Cardiff University
+# SPDX-FileCopyrightText: Copyright (C) 2022-2024 Frank C Langbein <frank@langbein.org>, Cardiff University
 # SPDX-FileCopyrightText: Copyright (C) 2022 Ebtihal Alwadee <AlwadeeEJ@cardiff.ac.uk>, PhD student at Cardiff University
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 from .cfg import Cfg
 
-import tensorflow as tf
+from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv3D, Conv3DTranspose, Dropout, MaxPooling3D, LeakyReLU, concatenate
 from tensorflow.keras.regularizers import l2
 
-from .trainer import dsc_loss, dsc, iou
 from .model import ModelGen
 
 class UNet3D(ModelGen):
@@ -90,7 +89,7 @@ class UNet3D(ModelGen):
     self.loss = loss
     self.metrics = metrics
     if optimiser is None: # Optimiser must be a function creating the optimiser using batch_size
-      self.optimiser = lambda batch_size : tf.keras.optimizers.Adam(learning_rate = 1e-4 * batch_size / 16.0)
+      self.optimiser = lambda batch_size : Adam(learning_rate = 1e-4 * batch_size / 16.0)
     else:
       self.optimiser = optimiser
     self.fixed_batch_size = fixed_batch_size

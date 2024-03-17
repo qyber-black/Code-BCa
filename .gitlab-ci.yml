@@ -1,16 +1,19 @@
 # .gitignore
 #                                                                                     
-# SPDX-FileCopyrightText: Copyright (C) 2022-2023 Frank C Langbein <frank@langbein.org>, Cardiff University
+# SPDX-FileCopyrightText: Copyright (C) 2022-2024 Frank C Langbein <frank@langbein.org>, Cardiff University
 # SPDX-License-Identifier: AGPL-3.0-or-later
 image: python:3.11
 
 before_script:
   - pip3 install pdoc
   - pip3 install -r requirements.txt
+  - pip3 uninstall -y keras
+  - pip3 install keras==2.15
 
 pages:
   script:
     - export PDOC_ALLOW_EXEC=1
+    - export PYTHONPATH=".:$PYTHONPATH"
     - pdoc bca -o ./public
   artifacts:
     paths:

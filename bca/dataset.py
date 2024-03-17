@@ -1,6 +1,6 @@
 # bca/dataset.py - Brain cancer dataset
 #
-# SPDX-FileCopyrightText: Copyright (C) 2022 Frank C Langbein <frank@langbein.org>, Cardiff University
+# SPDX-FileCopyrightText: Copyright (C) 2022-2023 Frank C Langbein <frank@langbein.org>, Cardiff University
 # SPDX-FileCopyrightText: Copyright (C) 2022-2023 Ebtihal Alwadee <AlwadeeEJ@cardiff.ac.uk>, PhD student at Cardiff University
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -8,6 +8,7 @@ from .cfg import Cfg
 
 import os
 import sys
+import warnings
 import psutil
 import joblib
 import csv
@@ -19,7 +20,7 @@ import nibabel.processing as nibp
 from tensorflow.keras.utils import Sequence
 
 class Dataset:
-  """Represents original dataset to genreate training sequences from, with preprocessing.
+  """Represents original dataset to generate training sequences from, with preprocessing.
 
   This is an iterator of the dataset and also implements `len` and `[idx]` operators and
   can be printed and converted to a string.
@@ -65,6 +66,9 @@ class Dataset:
       print(f"  Patients: {len(self)}")
       print(f"  Channels: "+", ".join(self.channels))
 
+    if len(self) < 1:
+      warnings.warn("No patients found")
+
     # Crop
     self.crops = None
     self.crops_type = "orig"
@@ -76,18 +80,76 @@ class Dataset:
       * `c`: Channel name used to make decision on (must be a segmentation mask);
       * `min_label_per`: minimum percentage of data in sample.
     """
+    # Cache for voxel counts
+    cache_data = []
+    cache_updated = False
+    if self.crops_type == "f":
+      data_cache = "f"+"x".join([str(c[0])+"_"+str(c[1]) for c in self.crops])
+    elif self.crops_type == "bb" or self.crops_type == "orig":
+      data_cache = self.crops_type
+    else:
+      raise Exception(f"Unknown crop type {self.crops_type}")
+    cache = os.path.join(self.cache, f"voxel_counts_{data_cache}.csv")
+    voxel_labels = [None] * len(self)
+    voxel_counts = [None] * len(self)
+    if os.path.isfile(cache):
+      with open(cache, "r") as f:
+        rows = csv.reader(f)
+        for row in rows:
+          try:
+            idx = self.patients.index(row[0])
+            labels = []
+            counts = []
+            for col in range(1,len(row)):
+              l, cnts = row[col].split(":")
+              labels.append(int(l))
+              counts.append(int(cnts))
+            voxel_labels[idx] = labels
+            voxel_counts[idx] = counts
+          except ValueError:
+            pass
+    # Update voxel counts
     remove_idx = []
     for k in reversed(range(0,len(self))): # Reversed to delete from end to start, so indices remain valid
-      fn = os.path.join(self.folder, self.patients[k], self.patients[k]+'_'+c+'.nii')
-      if not os.path.isfile(fn):
-        fn += ".gz"
-      data = nib.load(fn).get_fdata()
-      labels, label_counts = np.unique(data, return_counts=True)
-      labels = [int(l) for l in labels]
+      if voxel_labels[k] is not None and voxel_counts[k] is not None:
+        labels = voxel_labels[k]
+        label_counts = voxel_counts[k]
+      else:
+        fn = os.path.join(self.folder, self.patients[k], self.patients[k]+'_'+c+'.nii')
+        if not os.path.isfile(fn):
+          fn += ".gz"
+        data = nib.load(fn)
+        if self.crops_type != "orig":
+          # Respect crop for percentage
+          if self.crops_type == "f":
+            crp = self.crops
+          elif self.crops_type == "bb":
+            crp = self.crops[k]
+          else:
+            raise Exception(f"Illegal crops {self.crops_type}")
+          data = data.slicer[crp[1][0]:crp[1][1],crp[0][0]:crp[0][1],crp[2][0]:crp[2][1]]
+        data = data.get_fdata()
+        labels, label_counts = np.unique(data, return_counts=True)
+        labels = [int(l) for l in labels]
+        voxel_labels[k] = labels
+        voxel_counts[k] = label_counts
+        cache_updated = True
       cnt_a = np.sum(label_counts)
       cnt_l = np.sum([label_counts[l] for l in range(0,len(labels)) if labels[l] != 0])
-      if  cnt_l/cnt_a < min_label_per:
+      if cnt_l / cnt_a < min_label_per:
+        if Cfg.log(Cfg.Info):
+          print(f"Drop {self.patients[k]} - {cnt_l / cnt_a}%")
         remove_idx.append(k)
+    # Update cache
+    if cache_updated:
+      os.makedirs(self.cache, exist_ok=True)
+      if os.path.exists(cache):
+        os.remove(cache)
+      cache_data = [None] * len(self)
+      with open(cache, "w") as f:
+        out = csv.writer(f)
+        for idx in range(0,len(self)):
+          out.writerow([self.patients[idx]] + [str(voxel_labels[idx][col])+":"+str(voxel_counts[idx][col]) for col in range(0,len(voxel_labels[idx]))])
     # Delete indices
     for l in remove_idx:
       del self.patients[l]
@@ -99,11 +161,14 @@ class Dataset:
 
   def __str__(self):
     str = f"# Dataset: {self.folder} [{len(self)} patients]\n" + \
-          f"Cache: {self.cache}\n" + \
-          f"Channels (patient {self.patients[0]}):\n"
-    data = self[0]
-    for c in self.channels:
-      str += f"  {c}: {data[c].shape} ({data[c].get_data_dtype()})\n"
+          f"Cache: {self.cache}\n"
+    if len(self) > 0:
+      str += f"Channels (patient {self.patients[0]}):\n"
+      data = self[0]
+      for c in self.channels:
+        str += f"  {c}: {data[c].shape} ({data[c].get_data_dtype()})\n"
+    else:
+      str += "Empty dataset (no patients found)"
     if self.crops_type != "orig":
       if self.crops_type == "f":
         str += f"Crop: {self.crops}\n"
@@ -136,6 +201,35 @@ class Dataset:
       data[c] = nib.load(fn)
     return data
 
+  def cropped(self, idx, channels=None):
+    """Load nii common-modalities from patient array index and apply crop.
+
+    Args:
+      * `idx`: patient/sample index in dataset.
+      * `channel`: if not none, only load specified channels; otherwise load all specified in the dataset object.
+    
+    Return:
+      * Cropped patient data.
+    """
+    data = {}
+    if channels is None:
+      channels = self.channels
+    for c in channels:
+      fn = os.path.join(self.folder, self.patients[idx], self.patients[idx]+'_'+c+'.nii')
+      if not os.path.isfile(fn):
+        fn += ".gz"
+      data[c] = nib.load(fn)
+      if self.crops_type != "orig":
+        # Respect crop for percentage
+        if self.crops_type == "f":
+          crp = self.crops
+        elif self.crops_type == "bb":
+          crp = self.crops[idx]
+        else:
+          raise Exception(f"Illegal crops {self.crops_type}")
+        data[c] = data[c].slicer[crp[0][0]:crp[0][1],crp[1][0]:crp[1][1],crp[2][0]:crp[2][1]]
+    return data
+
   def patient_name(self,idx):
     """Map patient index to (folder) name.
 
@@ -161,6 +255,8 @@ class Dataset:
   def browse(self):
     """Interactive widget to browse data in notebooks.
     """
+    if len(self) < 1:
+      raise Exception("Dataset empty")
     from IPython.display import display, clear_output
     import matplotlib.pyplot as plt
     from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -274,7 +370,7 @@ class Dataset:
 
   @staticmethod
   def _bb_stack(data):
-    # Find bouding box of 3D stack with index k
+    # Find bounding box of 3D stack with index k
     indices = np.where(np.sum([np.abs(data[c].get_fdata()) for c in data], axis=0) > 0)
     return  [[np.min(indices[1]),np.max(indices[1])], # Note, row/column vs width/height!
              [np.min(indices[0]),np.max(indices[0])],
@@ -526,7 +622,8 @@ class Cache():
     if c[0:len(self.seg_mask)] == self.seg_mask:
       if c[len(self.seg_mask)] == "=":
         # Preserve labels listed (use negative index to indicate this for later processing)
-        return [-int(l) for l in c[(len(self.seg_mask)+1):].split("=")]
+        # Preserve =0 as -inf (this works later in the mask generation as 0 would remain 0 anyway)
+        return [-np.inf if int(l) == 0 else -int(l) for l in c[(len(self.seg_mask)+1):].split("=")]
       elif c[3] == "+":
         # Combine listed labels to binary mask
         return [int(l) for l in c[(len(self.seg_mask)+1):].split("+")]
@@ -570,8 +667,8 @@ class Cache():
           for l, p in enumerate(ci):
             np.copyto(V[0][k][...,l], data[...,p], casting="no")
             if len(V[2][k][l]) > 0:
-              # Process mask
-              if V[2][k][l][0] > 0:
+              # Process mask - create mask from mask index using copied channel from inp index
+              if V[2][k][l][0] >= 0:
                 # Combine labels
                 midx = (V[0][k][...,l] == V[2][k][l][0])
                 for kk in range (1,len(V[2][k][l])):
@@ -579,12 +676,15 @@ class Cache():
                 V[0][k][...,l] = midx
               else:
                 # Preserve labels
+                # Note, we represent =0 as -np.inf in the out index; 
+                # The works as 0 would be preserved as 0 in any case.
                 midx = (V[0][k][...,l] != -V[2][k][l][0])
                 for kk in range (1,len(V[2][k][l])):
                   midx &= (V[0][k][...,l] != -V[2][k][l][kk])
                 V[0][k][midx,l] = 0
       # Cache
-      if psutil.virtual_memory().percent < Cfg.val["low_mem_percentage"]:
+      if    (not self.warn and psutil.virtual_memory().percent < Cfg.val["low_mem_percentage"]) \
+         or (    self.warn and psutil.virtual_memory().percent < Cfg.val["low_mem_percentage"]-Cfg.val["low_mem_percentage_restart"]):
         if self.warn:
           print(f"***Warning: memory {psutil.virtual_memory().percent}% full; restarting cache***")
           self.warn = False
@@ -727,9 +827,10 @@ class SeqGen(Sequence):
               if len(vals) > 0:
                 pats = [patches.Patch(color=seg_cmap(v), label=str(v)) for v in vals]
                 ax[ax_idx].legend(handles=pats, loc=0, borderaxespad=0.1)
+              ax[ax_idx].set_title(self.names[cid-1]+"-Label"+str(V[1][l][k]))
             else:
               ax[ax_idx].imshow(V[0][l][:,:,slice-1,k], cmap=Cfg.val["brain_cmap"], interpolation='nearest')
-            ax[ax_idx].set_title(self.names[cid-1]+"-"+str(V[1][l][k]))
+              ax[ax_idx].set_title(self.names[cid-1]+"-"+str(self.cache.channels[self.cache.inp_chs_idx[l][k]]))
             ax_idx += 1
       plt.tight_layout()
       plt.show()

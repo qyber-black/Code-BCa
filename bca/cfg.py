@@ -1,6 +1,6 @@
 # bca/cfg.py - Configuration class
 #
-# SPDX-FileCopyrightText: Copyright (C) 2022-2023 Frank C Langbein <frank@langbein.org>, Cardiff University
+# SPDX-FileCopyrightText: Copyright (C) 2022-2024 Frank C Langbein <frank@langbein.org>, Cardiff University
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
@@ -70,8 +70,9 @@ class Cfg:
   val = {
     'path_root': None,
     'parallel': 2,              # Number of parallel threads for some tasks (via joblib)
-    'multiprocessing': True,    # Use multiprocessing (way not work on windows, so disable here)
-    'low_mem_percentage': 90,   # Percentage of memory indicating low CPU memory
+    'multiprocessing': True,    # Use multiprocessing
+    'low_mem_percentage': 85,   # Percentage of memory indicating low CPU memory
+    'low_mem_percentage_restart': 2, # If memory is this percentage amount less than above limit, restart caching
     'brain_cmap': 'gray',       # Default color map for brain images
     'gt_cmap': 'gray',          # Ground truth colormap for output masks
     'pr_cmap': 'viridis',       # Prediction colormap for output masks
@@ -80,12 +81,16 @@ class Cfg:
     'col_label2': [0,1,0,1],
     'col_label3': [1,0,1,1],
     'col_label4': [0,0,1,1],
+    'py_seed': None,            # Global python seed
+    'tf_seed': None,            # Global tensorflow seed
+    'tf_deterministic': False,  # Make tensorflow deterministic
     'figsize': (5.0,5.0),       # Sub-figure size
     'default_screen_dpi': 96,   # Image resolution for display (default, used if estimation fails)
     'screen_dpi': None,
     'image_dpi': [300],         # Image resolution for saving 
     'log': 1,                   # Level of log messages printed (Cfg.{Error,Warn,Info} = 1,2,3)
     'tf_log': 'ERROR',          # Tensorflow logging level
+    'xla_gpu_cuda_data_path': ["~/.local/cuda", "/usr/local/cuda", "/usr/cuda", "/usr/lib/cuda"], # XLA cuda search path
     'executors': {              # List of executors for scheduler (configure in cfg.json)
       #'scw': {                   # Example slurm cluster
       #  'type': 'slurm',
@@ -94,15 +99,15 @@ class Cfg:
       #  'user': 'USERNAME',
       #  'account': 'ACCOUNT',
       #  'remote_folder': 'code-bca',
-      #  'partitions': "gpu_v100,gpu",
+      #  'partitions': 'gpu_v100',
       #  'nodes': 1,
       #  'ntasks': 1,
       #  'ntasks_per_node': 1,
       #  'cpus_per_task': 4,
-      #  'mem': '96G',
-      #  'gres': 'gpu:2',
+      #  'mem': '64G',
+      #  'gres': 'gpu:1',
       #  'time': '2-00:00:00',
-      #  'modules': [ "system/auto", "hpcw", "python/3.10.4", "load CUDA/11.5"]
+      #  'modules': [ "system/auto", "python/3.10.4", "CUDA/11.7"]
       #},
       #'localhost': {             # Example host node (don't use localhost; see local type)
       #  'type': 'host',
@@ -170,14 +175,21 @@ class Cfg:
     if changed:
       with open(root_cfg_file, "w") as fp:
         print(json.dumps(root_cfg_vals, indent=2, sort_keys=True), file=fp)
+    # CUDA XLA data dir path
+    for dir in Cfg.val['xla_gpu_cuda_data_path']:
+      if os.path.isdir(dir):
+        os.environ["XLA_FLAGS"]=f"--xla_gpu_cuda_data_dir={dir}"
+        break
     # Dev flags
     if 'BCA_DEV' in os.environ:
       for f in os.environ['BCA_DEV'].split(":"):
         Cfg.dev_flags.add(f)
+    # Set seeds
+    Cfg.set_seeds()
 
   @staticmethod
   def dev(flag):
-    """Check if the developmnet flag `flag` has been set.
+    """Check if the development flag `flag` has been set.
 
     See the sources for available flags. If you add any, make sure to add them to the sources!
 
@@ -205,8 +217,44 @@ class Cfg:
     except:
       return Cfg.val['default_screen_dpi']
 
+  @staticmethod
+  def py_seed(seed):
+    # Initialize seeds for python libraries with stochastic behavior
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    import random
+    random.seed(seed)
+    import numpy as np
+    np.random.seed(seed)
+
+  @staticmethod
+  def tf_seed(seed, deterministic):
+    # Initialise global seed and determinism for tensorflow
+    if deterministic:
+      # Deterministic operations in tensorflow
+      os.environ['TF_DETERMINISTIC_OPS'] = '1'
+      os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+    import tensorflow as tf
+    tf.random.set_seed(seed)
+    if deterministic:
+      # Deterministic operations in tensorflow
+      tf.config.threading.set_inter_op_parallelism_threads(1)
+      tf.config.threading.set_intra_op_parallelism_threads(1)
+      tf.config.experimental.enable_op_determinism()
+
+  @staticmethod
+  def set_seeds(pseed="cfg", tseed="cfg", tdet="cfg"):
+    # Set all seeds using Cfg values if not specified
+    if pseed == "cfg":
+      pseed = Cfg.val['py_seed']
+    if tseed == "cfg":
+      tseed = Cfg.val['tf_seed']
+    if tdet == "cfg":
+      tdet = Cfg.val['tf_deterministic']
+    Cfg.py_seed(pseed)
+    Cfg.tf_seed(tseed, tdet)
+
 # TF log-level default
 if 'TF_CPP_MIN_LOG_LEVEL' not in os.environ:
-  os.environ['TF_CPP_MIN_LOG_LEVEL'] = '4'
+  os.environ['TF_CPP_MIN_LOG_LEVEL'] = '4' # No info, warnings or errors
 # Find base folder
 Cfg.init(os.path.dirname(os.path.realpath(__file__)))

@@ -8,6 +8,7 @@
 from .cfg import Cfg
 
 import os
+import shutil
 import glob
 import subprocess
 import time

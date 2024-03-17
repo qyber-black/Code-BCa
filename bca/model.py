@@ -38,11 +38,11 @@ class ModelGen(ABC):
                this  can also be a tuple where the first part is the input size and the last tuple entry the
                number of output classes - this is to be able to generate the model independent of the data,
                e.g., for plotting.
-      * `batch_size`: batch size for training; in particular this is used to adjust the learning rate for the optimiser
+      * `batch_size`: batch size for training; in particular this is used to adjust the learning rate for the optimizer
       * `jit_compile`: `jit_compile` argument for `Model.fit`
 
-    Retrun:
-      * Constructed and compiled model with optimiser
+    Return:
+      * Constructed and compiled model with optimizer
     """
     pass
 
@@ -62,9 +62,12 @@ class ModelGen(ABC):
     file = self.__class__.__name__+"plot.png" # temporary file
     if Cfg.val['multiprocessing']:
       import multiprocessing
-      p = multiprocessing.Process(target=self._plot,kwargs={"file": file, "dim": dim, "text": text})
-      p.start()
-      p.join()
+      try:
+        p = multiprocessing.Process(target=self._plot,kwargs={"file": file, "dim": dim, "text": text})
+        p.start()
+        p.join()
+      except:
+        p.kill()
       if p.exitcode != 0:
         raise Exception("Process failed")
     else:

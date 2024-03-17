@@ -6,17 +6,17 @@
 from .cfg import Cfg
 
 import os
-import sys
 import shutil
 import json
 import numpy as np 
-import collections
-import csv
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import segmentation_models_3D as sm
 import multiprocessing
+
+from .loss import WeightedDiceLoss, WeightedDiceScore
+from .metric import sDSC, HD95, Specificity
 
 import tensorflow as tf
 tf.get_logger().setLevel(Cfg.val['tf_log'])
@@ -27,6 +27,12 @@ dsc = sm.metrics.FScore(name="DSC")
 """F1/Dice score metric."""
 dsc_loss = sm.losses.DiceLoss()
 """F1/Dice loss."""
+hd95 = HD95(name="HD95")
+"""F1/Dice score metric."""
+sensitivity = sm.metrics.Recall(name="Sensitivity")
+"""Sensitivity metric."""
+specificity = Specificity(name="Specificity")
+"""Specificity metric."""
 iou = sm.metrics.IOUScore(name="IoU")
 """IoU(Intersection of Union)/Jaccard index metric."""
 
@@ -36,7 +42,7 @@ class ChkptLogger(tf.keras.callbacks.Callback):
   This callback is used by the training to record the model history and save the best and last model.
   """  
 
-  def __init__(self, path, best_monitor=("","DSC"), best_cmp=np.greater, save_traces=False, save_last=True):
+  def __init__(self, path, best_monitor=("loss","loss"), best_cmp="less", save_traces=False, save_last=True):
     """Create a ChkptLogger.
 
     Args:
@@ -44,7 +50,7 @@ class ChkptLogger(tf.keras.callbacks.Callback):
       * `best_monitor`: Selects metric to decide upon the best model. This is a pair of strings where the metric name
         must start with the first entry and finish with the second (for multiple outputs, etc. and to decide between
         test or training metric);
-      * `best_cmp`: Function to compare metric values for selecting best model (whether greater or smaller values are better);
+      * `best_cmp`: Name to indicate comparison function for selecting best model (whether greater ("greater") or smaller ("less") values are better);
       * `save_traces`: Boolean indicating whether to save traces with the model;
       * `save_last`: Boolean indicating whether to save last model
     """
@@ -58,7 +64,14 @@ class ChkptLogger(tf.keras.callbacks.Callback):
     self.best_model_path_old = os.path.join(path,"best-old")
     self.best_model_path_new = os.path.join(path,"best-new")
     self.best_monitor = best_monitor # pair - first part matches start and last part matches end, to account for multiple outputs
-    self.best_cmp = best_cmp
+    if best_cmp == "less":
+      import numpy as np
+      self.best_cmp = np.less
+    elif best_cmp == "greater":
+      import numpy as np
+      self.best_cmp = np.grater
+    else:
+      raise Exception(f"Unknown best_cmp {best_cmp}")
     self.last_model_path = os.path.join(path,"last")
     self.last_model_path_new = os.path.join(path,"last-new")
     self.save_traces = save_traces
@@ -86,7 +99,7 @@ class ChkptLogger(tf.keras.callbacks.Callback):
       if os.path.isdir(p):
         shutil.rmtree(p)
 
-  def on_epoch_begin(self, batch, logs=None):
+  def on_epoch_begin(self, epoch, logs=None):
     """Called at the start of an epoch to initiate timing history.
 
     Args:
@@ -203,7 +216,7 @@ class Trainer:
         f.write(status)
     return status
 
-  def train(self, seqs, jit_compile=True, remote=False):
+  def train(self, seqs, jit_compile=True, remote=False, best_monitor=("loss","loss"), best_cmp="less"):
     """Train the model.
 
     Trains the model on `seqs` Sequences (see `bca.dataset.SeqGen`, created from `bca.dataset.Dataset`),
@@ -219,19 +232,27 @@ class Trainer:
       * `jit_compile`: `jit_compile` argument for `Model.fit()`
       * `remote`: run jobs remotely; this means only the `task.py` files will be created for execution by the
          scheduler.
+      * `best_monitor`: Selects metric to decide upon the best model. This is a pair of strings where the metric name
+        must start with the first entry and finish with the second (for multiple outputs, etc. and to decide between
+        test or training metric);
+      * `best_cmp`: Function to compare metric values for selecting best model (whether greater or smaller values are better).
     """
     # Run this in separate process so we clear resources afterwards
     if Cfg.val["multiprocessing"]:
-      p = multiprocessing.Process(target=self._train, kwargs={"seqs": seqs, "jit_compile": jit_compile,
-                                                              "remote": remote})
-      p.start()
-      p.join()
+      try:
+        p = multiprocessing.Process(target=self._train, kwargs={"seqs": seqs, "jit_compile": jit_compile,
+                                                                "remote": remote, "best_monitor": best_monitor,
+                                                                "best_cmp": best_cmp})
+        p.start()
+        p.join()
+      except:
+        p.kill()
       if p.exitcode != 0:
         raise Exception("Process failed")
     else:
-      self._train(seqs, jit_compile, remote)
+      self._train(seqs, jit_compile, remote, best_monitor, best_cmp)
 
-  def _train(self, seqs, jit_compile, remote):
+  def _train(self, seqs, jit_compile, remote, best_monitor, best_cmp):
     # Train model on sequences
     if remote:
       s_start = 0
@@ -247,11 +268,11 @@ class Trainer:
         if remote:
           # Remote train model
           print(f"start remote - {path}")
-          self._remote_train_model(path, seq[0], seq[1], jit_compile)
+          self._remote_train_model(path, seq[0], seq[1], jit_compile, best_monitor, best_cmp)
           s_start += 1
         else:
           print(f"start local - {path}")
-          self._train_model(path, seq[0], seq[1], jit_compile)
+          self._train_model(path, seq[0], seq[1], jit_compile, best_monitor, best_cmp)
           s = self._status(path)
       elif s == "training":
         if remote:
@@ -265,9 +286,11 @@ class Trainer:
           if len(status) == 8:
             # Local training (no executor specified)
             print(f"restart local - {path}")
-            self._train_model(path, seq[0], seq[1], jit_compile)
+            self._train_model(path, seq[0], seq[1], jit_compile, best_monitor, best_cmp)
             s = self._status(path)
             train_run = True
+          else:
+            print(f"setup remotely")
       elif s == "done":
         print(f"done - {path}")
         if remote:
@@ -283,7 +306,7 @@ class Trainer:
     if remote:
       print(f"=> Done: {s_done}; Failed: {s_failed}; Training: {s_training}; Start: {s_start}")
 
-  def _train_model(self, path, train_seq, test_seq, jit_compile):
+  def _train_model(self, path, train_seq, test_seq, jit_compile, best_monitor, best_cmp):
     # Train model locally, not using any executors
     if os.path.exists(os.path.join(path, "task.py")):
       os.remove(os.path.join(path, "task.py"))
@@ -303,11 +326,11 @@ class Trainer:
         red_epochs = 0
     # Fit model
     model.fit(train_seq, validation_data=test_seq, epochs=self.epochs-red_epochs,
-              callbacks=[ChkptLogger(path)], verbose=1)
+              callbacks=[ChkptLogger(path, best_monitor=best_monitor, best_cmp=best_cmp)], verbose=1)
     #
     self._set_status(path,"end")
 
-  def _remote_train_model(self, path, train_seq, test_seq, jit_compile):
+  def _remote_train_model(self, path, train_seq, test_seq, jit_compile, best_monitor, best_cmp):
     # Training file is not fully secure and must be created by task scheduler for remote tasks (depends on platform)
     # Create task script
     os.makedirs(path,exist_ok=True)
@@ -335,6 +358,11 @@ class Trainer:
       f.write(f"# Training task: {path}\n")
       f.write( "import os\n")
       f.write( "import json\n")
+      f.write(f"for dir in {Cfg.val['xla_gpu_cuda_data_path']}:\n")
+      f.write( "  if os.path.isdir(dir):\n")
+      f.write( '    os.environ["XLA_FLAGS"]=f"--xla_gpu_cuda_data_dir={dir}"\n')
+      f.write( "    break\n")
+      f.write( "import numpy as np\n")
       f.write( "import tensorflow as tf\n")
       f.write(f"tf.get_logger().setLevel('{Cfg.val['tf_log']}')\n")
       f.write( "from bca.trainer import ChkptLogger, Trainer\n")
@@ -352,7 +380,7 @@ class Trainer:
       # We suggest to add flags to the model and adjust the code here depending on the flags; also needs to be done in _train_model to match
       f.write( "with tf.distribute.MirroredStrategy().scope():\n")
       f.write( "  model = tf.keras.models.load_model(best_path, custom_objects=Trainer.custom_objects)\n")
-      f.write(f"model.fit(train_seq, validation_data=test_seq, epochs={self.epochs}-red_epochs, callbacks=[ChkptLogger('{path}')], verbose=1)\n")
+      f.write(f"model.fit(train_seq, validation_data=test_seq, epochs={self.epochs}-red_epochs, callbacks=[ChkptLogger('{path}', best_monitor={best_monitor}, best_cmp='{best_cmp}')], verbose=1)\n")
 
   def eval(self, seqs, mode="best", fs=[dsc,iou], std_eval=None):
     """Evaluate models for Sequences.
@@ -371,10 +399,13 @@ class Trainer:
     """
     # Run this in separate process so we clear resources afterwards
     if Cfg.val["multiprocessing"]:
-      p = multiprocessing.Process(target=self._eval, kwargs={"seqs": seqs, "mode": mode, "fs": fs,
-                                                             "std_eval": std_eval})
-      p.start()
-      p.join()
+      try:
+        p = multiprocessing.Process(target=self._eval, kwargs={"seqs": seqs, "mode": mode, "fs": fs,
+                                                               "std_eval": std_eval})
+        p.start()
+        p.join()
+      except:
+        p.kill()
       if p.exitcode != 0:
         raise Exception("Process failed")
     else:
@@ -407,7 +438,7 @@ class Trainer:
           broken = True
           break
       if not broken and std_eval is not None:
-        if  len(eval_data["train_std_per_sample"]) == 0 or len(eval_data["test_std_per_sample"]) == 0:
+        if len(eval_data["train_std_per_sample"]) == 0 or len(eval_data["test_std_per_sample"]) == 0:
           broken = True
       if not broken:
         return
@@ -450,10 +481,11 @@ class Trainer:
             if len(Y) > 1:
               key += "-"+str(kk) # Add output index, if multiple outputs
             val = float(f(Y[kk][k:k+1,...], P[kk][k:k+1,...]).numpy())
-            if key in tr_res:
-              tr_res[key].append(val)
-            else:
-              tr_res[key] = [val]
+            if not np.isnan(val): # nan means metric not applicable, so do not include in stats
+              if key in tr_res:
+                tr_res[key].append(val)
+              else:
+                tr_res[key] = [val]
             # Last channel is index for output maps - if there is more than one
             # map we apply the metrics to each individually as well to handle
             # multi-segmentation, etc. results
@@ -478,10 +510,11 @@ class Trainer:
             for f in fs:
               key = f.name
               val_std = float(f(std_data[std_name][0], std_data[std_name][1]).numpy())
-              if key in tr_std[std_name]:
-                tr_std[std_name][key].append(val_std)
-              else:
-                tr_std[std_name][key] = [val_std]
+              if not np.isnan(val_std): # nan means metric not applicable, so do not include in stats
+                if key in tr_std[std_name]:
+                  tr_std[std_name][key].append(val_std)
+                else:
+                  tr_std[std_name][key] = [val_std]
     # Test predictions
     te_res = {} # Direct/raw evaluation data for testing
     te_std = {} # Standardised  evaluation data for testing
@@ -502,10 +535,11 @@ class Trainer:
               if len(Y) > 1:
                 key += "-"+str(kk) # Add output index, if multiple outputs
               val = float(f(Y[kk][k:k+1,...],P[kk][k:k+1,...]).numpy())
-              if key in te_res:
-                te_res[key].append(val)
-              else:
-                te_res[key] = [val]
+              if not np.isnan(val): # nan means metric not applicable, so do not include in stats
+                if key in te_res:
+                  te_res[key].append(val)
+                else:
+                  te_res[key] = [val]
               # Last channel is index for output maps - if there is more than one
               # map we apply the metrics to each individually as well to handle
               # multi-segemtnation, etc. results
@@ -530,10 +564,11 @@ class Trainer:
               for f in fs:
                 key = f.name
                 val_std = float(f(std_data[std_name][0], std_data[std_name][1]).numpy())
-                if key in te_std[std_name]:
-                  te_std[std_name][key].append(val_std)
-                else:
-                  te_std[std_name][key] = [val_std]
+                if not np.isnan(val_std): # nan means metric not applicable, so do not include in stats
+                  if key in te_std[std_name]:
+                    te_std[std_name][key].append(val_std)
+                  else:
+                    te_std[std_name][key] = [val_std]
 
     # Save evaluation data
     eval = {
@@ -579,9 +614,12 @@ class Trainer:
     if not (os.path.isfile(os.path.join(path,"..","summary.txt")) and im_dpi and            
             os.path.isfile(os.path.join(path,"..","architecture@"+str(Cfg.val['screen_dpi'])+".png"))):
       if Cfg.val["multiprocessing"]:
-        p = multiprocessing.Process(target=self._plot_model,kwargs={"path": path, "seq": seq, "mode": mode})
-        p.start()
-        p.join()
+        try:
+          p = multiprocessing.Process(target=self._plot_model,kwargs={"path": path, "seq": seq, "mode": mode})
+          p.start()
+          p.join()
+        except:
+          p.kill()
         if p.exitcode != 0:
           raise Exception("Process failed")
       else:
@@ -681,8 +719,8 @@ class Trainer:
     for k in range(0,len(history)):
       ax = fig.add_subplot(gs[1,k])
       sns.histplot(data=history[k]["time"],color='#1f77b4')
-      m = np.mean(history[k]["time"])
-      s = np.std(history[k]["time"])
+      m = np.nanmean(history[k]["time"])
+      s = np.nanstd(history[k]["time"])
       plt.axvline(x=m,color='#1f77b4')
       plt.errorbar(x=m,y=np.mean(ax.get_ylim()),xerr=s,color='#1f77b4')
       ax.set_xlabel(f"Time (s) per Epoch: {m:.4f}σ{s:.4f}")
@@ -697,8 +735,8 @@ class Trainer:
         ax = fig.add_subplot(gs[2+f,k])
         # Train
 
-        mean = np.mean(evals[k]["train_per_sample"][fk])
-        std = np.std(evals[k]["train_per_sample"][fk])
+        mean = np.nanmean(evals[k]["train_per_sample"][fk])
+        std = np.nanstd(evals[k]["train_per_sample"][fk])
         sns.histplot(data=evals[k]["train_per_sample"][fk],
                      label=f"Train {eval_mode} {fk}': {mean:.4f}σ{std:.4f}",
                      ax=ax,color=palette[2*f])
@@ -708,8 +746,8 @@ class Trainer:
         ax.errorbar(x=mean,y=np.mean(r)+0.02*(r[1]-r[0]),xerr=std,color=palette[2*f])
         # Test
         if evals[k]["test_per_sample"] is not None:
-          mean = np.mean(evals[k]["test_per_sample"][fk])
-          std = np.std(evals[k]["test_per_sample"][fk])
+          mean = np.nanmean(evals[k]["test_per_sample"][fk])
+          std = np.nanstd(evals[k]["test_per_sample"][fk])
           sns.histplot(data=evals[k]["test_per_sample"][fk],
                        label=f"Test {eval_mode} {fk}': {mean:.4f}σ{std:.4f}",
                        ax=ax,color=palette[2*f+1])
@@ -726,8 +764,8 @@ class Trainer:
           ax = fig.add_subplot(gs[2+len(evals[k]["train_per_sample"].keys())
                                   +keyn*len(evals[0]["train_std_per_sample"][key].keys())+f,k])
           # Train
-          mean = np.mean(evals[k]["train_std_per_sample"][key][fk])
-          std = np.std(evals[k]["train_std_per_sample"][key][fk])
+          mean = np.nanmean(evals[k]["train_std_per_sample"][key][fk])
+          std = np.nanstd(evals[k]["train_std_per_sample"][key][fk])
           sns.histplot(data=evals[k]["train_std_per_sample"][key][fk],
                       label=f"Train {eval_mode} STD {key.upper()} {fk}: {mean:.4f}σ{std:.4f}",
                       ax=ax,color=palette[2*f])
@@ -737,8 +775,8 @@ class Trainer:
           ax.errorbar(x=mean,y=np.mean(r)+0.02*(r[1]-r[0]),xerr=std,color=palette[2*f])
           # Test
           if evals[k]["test_std_per_sample"] is not None:
-            mean = np.mean(evals[k]["test_std_per_sample"][key][fk])
-            std = np.std(evals[k]["test_std_per_sample"][key][fk])
+            mean = np.nanmean(evals[k]["test_std_per_sample"][key][fk])
+            std = np.nanstd(evals[k]["test_std_per_sample"][key][fk])
             sns.histplot(data=evals[k]["test_std_per_sample"][key][fk],
                          label=f"Test {eval_mode} STD {key.upper()} {fk}: {mean:.4f}σ{std:.4f}",
                          ax=ax,color=palette[2*f+1])
@@ -771,45 +809,45 @@ class Trainer:
             cs.append(f"val_{key}")
       # Per-sample metrics
       for c,key in enumerate(evals[k]["train_per_sample"].keys()):
-        data[k,r] = np.mean(evals[k]["train_per_sample"][key])
+        data[k,r] = np.nanmean(evals[k]["train_per_sample"][key])
         r += 1
         if k == 0:
           cs.append(f"{key}'")
         if key in evals[k]["test_per_sample"]:
-          data[k,r] = np.mean(evals[k]["test_per_sample"][key])
+          data[k,r] = np.nanmean(evals[k]["test_per_sample"][key])
           r += 1
           if k == 0:
             cs.append(f"val_{key}'")
       # STD per-sample metrics
       for c,key in enumerate(evals[k]["train_std_per_sample"].keys()):
         for cc,metrickey in enumerate(evals[k]["train_std_per_sample"][key].keys()):
-          data[k,r] = np.mean(evals[k]["train_std_per_sample"][key][metrickey])
+          data[k,r] = np.nanmean(evals[k]["train_std_per_sample"][key][metrickey])
           r += 1
           if k == 0:
             cs.append(f"STD-{key}-{metrickey}")
           if key in evals[k]["test_std_per_sample"]:
             if metrickey in evals[k]["test_std_per_sample"][key]:
-              data[k,r] = np.mean(evals[k]["test_std_per_sample"][key][metrickey])
+              data[k,r] = np.nanmean(evals[k]["test_std_per_sample"][key][metrickey])
               r += 1
               if k == 0:
                 cs.append(f"val_STD-{key}-{metrickey}")
     idx.append("Mean")
     idx.append("Std")
-    data[len(seqs),:] = np.mean(data[0:len(seqs),:], axis=0)
-    data[len(seqs)+1,:] = np.std(data[0:len(seqs),:], axis=0)
+    data[len(seqs),:] = np.nanmean(data[0:len(seqs),:], axis=0)
+    data[len(seqs)+1,:] = np.nanstd(data[0:len(seqs),:], axis=0)
     data = pd.DataFrame(data, columns=cs, index=idx)
 
     # Plot across folds
     d = data.iloc[0:data.shape[0]-2,:]
     ax = fig.add_subplot(gs[-1,0])
     d1 = d.loc[:,[col for col in d.columns if 'loss' in col]]
-    sns.boxplot(data=d1, ax=ax, palette=plt.cm.rainbow(np.linspace(0,1,len([c for c in d.columns if 'loss' in c]))))
+    sns.boxplot(data=d1, ax=ax, palette=plt.cm.rainbow(np.linspace(0,1,len([c for c in d.columns if 'loss' in c]))).tolist())
     sns.stripplot(data=d1, jitter=False, palette='dark:black', size=10, alpha=0.5, ax=ax)
     ax.set_title(f"Final losses across folds for {eval_mode} model")
 
     ax = fig.add_subplot(gs[-1,1:])
     d1 = d.loc[:,[col for col in d.columns if 'loss' not in col]]
-    sns.boxplot(data=d1, ax=ax, palette=plt.cm.rainbow(np.linspace(0,1,len([c for c in d.columns if 'loss' not in c]))))
+    sns.boxplot(data=d1, ax=ax, palette=plt.cm.rainbow(np.linspace(0,1,len([c for c in d.columns if 'loss' not in c]))).tolist())
     sns.stripplot(data=d1, jitter=False, palette='dark:black', size=10, alpha=0.5, ax=ax)
     ax.set_title(f"Final metrics across folds for {eval_mode} model")
     ax.tick_params(axis="x", labelrotation=90)
@@ -900,7 +938,10 @@ class Trainer:
       def btn_clicked(b):
         nonlocal inp_q, p
         inp_q.put({"path": "quit"})
-        p.join()
+        try:
+          p.join()
+        except:
+          p.kill()
         if p.exitcode != 0:
           raise Exception("Prediction process failed")
         b.description="Prediction Halted"
@@ -920,7 +961,7 @@ class Trainer:
 
   @staticmethod
   def _browse_predict_proc(inp_q, out_q):
-    # Prediction in separate process, via queue's, taking in 
+    # Prediction in separate process, via queue's, taking in
     # task dictionary with path and X argument.
     path = None
     model = None
@@ -963,5 +1004,11 @@ class Trainer:
   custom_objects = {
     dsc.__name__: dsc,
     dsc_loss.__name__: dsc_loss,
-    iou.__name__: iou
+    iou.__name__: iou,
+    WeightedDiceLoss.__name__: WeightedDiceLoss,
+    WeightedDiceScore.__name__: WeightedDiceScore,
+    sDSC.__name__: sDSC,
+    hd95.__name__: hd95,
+    sensitivity.__name__: sensitivity,
+    specificity.__name__: specificity
   }

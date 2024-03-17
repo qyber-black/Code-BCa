@@ -1,17 +1,16 @@
-# BCa - Brain Cancer Segmentation Python Module
+# BCa - Brain Cancer Segmentation Python Package
 
-> SPDX-FileCopyrightText: Copyright (C) 20222023 Ebtihal Alwadee <AlwadeeEJ@cardiff.ac.uk>, PhD student at Cardiff University\
-> SPDX-FileCopyrightText: Copyright (C) 2022-2023 Frank C Langbein <frank@langbein.org>, Cardiff University
+> SPDX-FileCopyrightText: Copyright (C) 2022-2024 Ebtihal Alwadee <AlwadeeEJ@cardiff.ac.uk>, PhD student at Cardiff University\
+> SPDX-FileCopyrightText: Copyright (C) 2022-2024 Frank C Langbein <frank@langbein.org>, Cardiff University
 >
 > SPDX-License-Identifier: AGPL-3.0-or-later
 
 This contains python code for brain cancer segmentation with deep learning, including a range of network
 architectures.
 
-The architectures consist of basic 3D UNets and the 3D LATUP-Net segmentation model. The LATUP-Net code
-is a prototype, separate in the LATUP-Net folder for now.
+The architectures consist of basic 3D UNets and the 3D LATUP-Net segmentation model with some variations/parameters.
 
-Results of using these modules are available at https://qyber.black/ca/bca/results-bca-unet.
+Results of using these modules are available at https://qyber.black/ca/results-bca-unet.
 
 ## Installation
 
@@ -32,5 +31,5 @@ Of course you can use pdoc to generate the documentation differently (see the pd
 
 ## Citation
 
-E Alwadee, FC Langbein. **BCa - Brain Cancer Segmentation using Deep Learning**. V0.1. Software. 2023. 
-https://qyber.black/ca/bca/code-bca
+E Alwadee, FC Langbein. **BCa - Brain Cancer Segmentation Python Package**. Version 1.0. Software. 2024. 
+https://qyber.black/ca/code-bca
