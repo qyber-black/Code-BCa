@@ -34,4 +34,4 @@ Other sub-modules are:
     also provides configuration options.
 """
 
-__all__ = ["dataset", "model", "trainer", "scheduler", "unet", "latupnet", "loss", "metric", "interpret", "cfg"]
+__all__ = ["dataset", "model", "trainer", "scheduler", "unet", "latupnet", "loss", "metric", "cfg"]
