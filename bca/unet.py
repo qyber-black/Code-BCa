@@ -115,7 +115,7 @@ class UNet3D(ModelGen):
       classes = seq[-1] # Last element of tuple is number of classes
     else:
       if len(seq.cache.inp_chs) != 1 or len(seq.cache.out_chs) != 1:
-        raise Exception("Invalid input/output numbers")
+        raise RuntimeError("Invalid input/output numbers")
       inputs = Input(shape=(*seq.dim,len(seq.cache.inp_chs[0])),batch_size=batch_size if self.fixed_batch_size else None)
       classes = len(seq.cache.out_chs[0]) # Determine classes from output shape
     # Encoder

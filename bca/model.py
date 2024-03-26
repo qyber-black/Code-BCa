@@ -69,7 +69,7 @@ class ModelGen(ABC):
       except:
         p.kill()
       if p.exitcode != 0:
-        raise Exception("Process failed")
+        raise RuntimeError("Process failed")
     else:
       self._plot(file, dim, text)
     if text:

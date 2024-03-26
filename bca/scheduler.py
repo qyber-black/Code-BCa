@@ -86,20 +86,20 @@ class SlurmScheduler:
                             self.user+"@"+self.host+":"+self.remote_folder],
                            capture_output=True)
       if SlurmScheduler._proc_res(res):
-        raise Exception(f"Sync'ing {src} failed")
+        raise RuntimeError(f"Sync'ing {src} failed")
 
     task_path = os.path.dirname(task)
     data_path = os.path.dirname(os.path.dirname(os.path.dirname(task_path)))
     res = subprocess.run(["ssh",self.user+"@"+self.host,"mkdir -p "+os.path.join(self.remote_folder,data_path)],capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Mkdir {data_path} failed")
+      raise RuntimeError(f"Mkdir {data_path} failed")
     res = subprocess.run(["rsync","-am","--delete",
                           "--include=*.npy","--exclude=*",
                           os.path.join(self.local_folder,data_path)+"/",
                           self.user+"@"+self.host+":"+os.path.join(self.remote_folder,data_path)],
                          capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Sync'ing {data_path} failed")
+      raise RuntimeError(f"Sync'ing {data_path} failed")
 
     print(f"  ## Schedule job for {task}")
     with open(os.path.join(self.local_folder,task_path,"job.sh"), "w") as f:
@@ -130,19 +130,19 @@ class SlurmScheduler:
       f.write(f'test "$?" = 0 && date >~/{self.remote_folder}/{task_path}/done\n')
     res = subprocess.run(["ssh",self.user+"@"+self.host,"mkdir -p "+os.path.join(self.remote_folder,task_path)],capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Mkdir {task_path} failed")
+      raise RuntimeError(f"Mkdir {task_path} failed")
     res = subprocess.run(["rsync","-am","--delete",
                           "--exclude=__pycache__",
                           os.path.join(self.local_folder,task_path)+"/",
                           self.user+"@"+self.host+":"+os.path.join(self.remote_folder,task_path)],
                          capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Sync'ing {task_path} failed")
+      raise RuntimeError(f"Sync'ing {task_path} failed")
 
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"sbatch -A {self.account} {self.remote_folder}/{task_path}/job.sh"],
                          capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Scheduling {task} failed")
+      raise RuntimeError(f"Scheduling {task} failed")
 
   def check(self, task):
     """Check status of the task.
@@ -173,10 +173,10 @@ class SlurmScheduler:
                           task_path],
                          capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Copying {task} results failed")
+      raise RuntimeError(f"Copying {task} results failed")
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"rm -rf {self.remote_folder}/{task_path}"], capture_output=True)
     if SlurmScheduler._proc_res(res):
-      raise Exception(f"Removing remote result folder failed")
+      raise RuntimeError(f"Removing remote result folder failed")
     return result
 
 class HostScheduler:
@@ -237,20 +237,20 @@ class HostScheduler:
                             self.user+"@"+self.host+":"+self.remote_folder],
                            capture_output=True)
       if HostScheduler._proc_res(res):
-        raise Exception(f"Sync'ing {src} failed")
+        raise RuntimeError(f"Sync'ing {src} failed")
 
     task_path = os.path.dirname(task)
     data_path = os.path.dirname(os.path.dirname(os.path.dirname(task_path)))
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"mkdir -p {os.path.join(self.remote_folder,data_path)}"],capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Mkdir {data_path} failed")
+      raise RuntimeError(f"Mkdir {data_path} failed")
     res = subprocess.run(["rsync","-am","--delete",
                           "--include=*.npy","--exclude=*",
                           os.path.join(self.local_folder,data_path)+"/",
                           self.user+"@"+self.host+":"+os.path.join(self.remote_folder,data_path)],
                          capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Sync'ing {data_path} failed")
+      raise RuntimeError(f"Sync'ing {data_path} failed")
 
     print(f"  ## Schedule job for {task}")
     with open(os.path.join(self.local_folder,task_path,"job.sh"), "w") as f:
@@ -261,19 +261,19 @@ class HostScheduler:
       f.write(f'test "$?" = 0 && date >~/{self.remote_folder}/{task_path}/done\n')
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"mkdir -p {os.path.join(self.remote_folder,task_path)}"],capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Mkdir {task_path} failed")
+      raise RuntimeError(f"Mkdir {task_path} failed")
     res = subprocess.run(["rsync","-am","--delete",
                           "--exclude=__pycache__",
                           os.path.join(self.local_folder,task_path)+"/",
                           self.user+"@"+self.host+":"+os.path.join(self.remote_folder,task_path)],
                          capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Sync'ing {task_path} failed")
+      raise RuntimeError(f"Sync'ing {task_path} failed")
 
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"nohup sh {self.remote_folder}/{task_path}/job.sh >/dev/null 2>&1 &"],
                          capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Scheduling {task} failed")
+      raise RuntimeError(f"Scheduling {task} failed")
 
   def check(self, task):
     """Check status of the task.
@@ -304,10 +304,10 @@ class HostScheduler:
                           task_path],
                          capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception(f"Copying {task} results failed")
+      raise RuntimeError(f"Copying {task} results failed")
     res = subprocess.run(["ssh",self.user+"@"+self.host,f"rm -rf {self.remote_folder}/{task_path}"], capture_output=True)
     if HostScheduler._proc_res(res):
-      raise Exception("Removing remote result folder failed")
+      raise RuntimeError("Removing remote result folder failed")
     return result
 
 class LocalScheduler:
@@ -425,7 +425,7 @@ def schedule(task_folder="results", wait=60, notebook=True):
     print("**WARNING - ths scheduler only runs reliably and is only supported on Linux/POSIX**")  
   local_folder = os.path.dirname(os.path.abspath(task_folder))
   if not os.path.isdir(local_folder): 
-    raise Exception("Cannot find location of data-root folder (containing {local_folder})")
+    raise RuntimeError("Cannot find location of data-root folder (containing {local_folder})")
  
   # Collect executors from config
   execs = {}
@@ -438,7 +438,7 @@ def schedule(task_folder="results", wait=60, notebook=True):
     elif t == "host":
       execs[k] = HostScheduler(Cfg.val["executors"][k], local_folder)
     else:
-      raise Exception(f"Unknown executor type {t}")
+      raise RuntimeError(f"Unknown executor type {t}")
   first_run = True
 
   # Keep scheduling (until nothing more found; can be interrupted)
@@ -521,7 +521,7 @@ def schedule_clean(task_folder="results"):
     print("**WARNING - ths scheduler only runs reliably and is only supported on Linux/POSIX**")  
   local_folder = os.path.dirname(os.path.abspath(task_folder))
   if not os.path.isdir(local_folder): 
-    raise Exception(f"Cannot find location of data-root folder (containing {local_folder})")
+    raise RuntimeError(f"Cannot find location of data-root folder (containing {local_folder})")
  
   # Keep scheduling (until nothing more found; can be interrupted)
   for task in glob.glob(task_folder+"/**/task.py", recursive=True):

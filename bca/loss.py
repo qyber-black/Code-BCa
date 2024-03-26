@@ -33,7 +33,7 @@ def compute_channel_weights(ds, mask_channel, channels, mode="enet", normalise=F
   elif ds.crops_type == "bb" or ds.crops_type == "orig":
     data_cache = ds.crops_type
   else:
-    raise Exception(f"Unknown crop type {ds.crops_type}")
+    raise RuntimeError(f"Unknown crop type {ds.crops_type}")
   cache = os.path.join(ds.cache, f"voxel_counts_{data_cache}.csv")
   voxel_labels = [None] * len(ds)
   voxel_counts = [None] * len(ds)
@@ -79,7 +79,7 @@ def compute_channel_weights(ds, mask_channel, channels, mode="enet", normalise=F
     for ch in channels:
       weights[ch] = 1/np.log(enet_c + float(channel_volumes[ch])/float(total_volume)) if channels[ch][1] else 0.0
   else:
-    raise Exception(f"Unknown class_weight mode {mode}")
+    raise RuntimeError(f"Unknown class_weight mode {mode}")
   if normalise:
     # Compute total weight for normalisation
     total_weight = 0.0

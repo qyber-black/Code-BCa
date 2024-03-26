@@ -10,7 +10,7 @@ architectures.
 
 The architectures consist of basic 3D UNets and the 3D LATUP-Net segmentation model with some variations/parameters.
 
-Results of using these modules are available at https://qyber.black/ca/results-bca-unet.
+Results of using these modules are available at https://qyber.black/ca/results-bca-latup.
 
 ## Installation
 
