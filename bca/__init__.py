@@ -17,6 +17,7 @@ Modules with general functionality for datasets and models:
   * **bca.model**: Base class for model generator classes (used by models below).
   * **bca.loss**: Custom loss classes.
   * **bca.metric**: Custom metrics classes.
+  * **bca.interpret**: Explainability functionality.
   * **bca.scheduler**: Scheduler to train models remotely from jupyter notebooks or from the command line
     (mostly limited to Linux as `rsync` and `ssh` are needed). Tasks for the scheduler are created by trainer.
 
@@ -34,4 +35,4 @@ Other sub-modules are:
     also provides configuration options.
 """
 
-__all__ = ["dataset", "model", "trainer", "scheduler", "unet", "latupnet", "loss", "metric", "cfg"]
+__all__ = ["dataset", "model", "trainer", "scheduler", "unet", "latupnet", "loss", "metric", "interpret", "cfg"]

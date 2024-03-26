@@ -17,6 +17,7 @@ import multiprocessing
 
 from .loss import WeightedDiceLoss, WeightedDiceScore
 from .metric import sDSC, HD95, Specificity
+from .interpret import ConfusionMatrices, GradCamVisualizer
 
 import tensorflow as tf
 tf.get_logger().setLevel(Cfg.val['tf_log'])
@@ -71,7 +72,7 @@ class ChkptLogger(tf.keras.callbacks.Callback):
       import numpy as np
       self.best_cmp = np.grater
     else:
-      raise Exception(f"Unknown best_cmp {best_cmp}")
+      raise RuntimeError(f"Unknown best_cmp {best_cmp}")
     self.last_model_path = os.path.join(path,"last")
     self.last_model_path_new = os.path.join(path,"last-new")
     self.save_traces = save_traces
@@ -171,7 +172,9 @@ class Trainer:
   """
 
   def __init__(self, model, epochs):
-    """Args:
+    """Create a new trainer.
+    
+    Args:
       * `model`: model object providing a `model.name` name variable and a `model.construct(seq, batch_size, jit_compile)`
          method to create the model. See, for instance, `bca.unet.Unet3D`.
       * `epochs`: number of training epochs.
@@ -248,7 +251,7 @@ class Trainer:
       except:
         p.kill()
       if p.exitcode != 0:
-        raise Exception("Process failed")
+        raise RuntimeError("Process failed")
     else:
       self._train(seqs, jit_compile, remote, best_monitor, best_cmp)
 
@@ -300,7 +303,7 @@ class Trainer:
         if remote:
           s_failed += 1
       else:
-        raise Exception(f"Unknonw status {s}")
+        raise RuntimeError(f"Unknonw status {s}")
       if not remote and train_run:
         display.clear_output(wait=True)
     if remote:
@@ -407,7 +410,7 @@ class Trainer:
       except:
         p.kill()
       if p.exitcode != 0:
-        raise Exception("Process failed")
+        raise RuntimeError("Process failed")
     else:
       self._eval(seqs, mode, fs, std_eval)
 
@@ -421,6 +424,7 @@ class Trainer:
 
   def _eval_model(self, train_seq, test_seq, mode, fs, std_eval):
     # Eval model for train/test sequence
+    # FIXME: this needs to be sped up by not processing each sample individually
     path = self._model_path(train_seq)
     # Return if model does not exist
     if not os.path.isdir(os.path.join(path,"last")):
@@ -434,12 +438,9 @@ class Trainer:
       broken = False
       for f in ["train_total", "test_total", "train_per_sample", "test_per_sample", 
                 "train_std_per_sample", "test_std_per_sample"]:
-        if f not in eval_data:
+        if f not in eval_data or len(eval_data[f]) == 0:
           broken = True
           break
-      if not broken and std_eval is not None:
-        if len(eval_data["train_std_per_sample"]) == 0 or len(eval_data["test_std_per_sample"]) == 0:
-          broken = True
       if not broken:
         return
       os.remove(eval_path)
@@ -585,6 +586,109 @@ class Trainer:
     # Cleanup
     tf.keras.backend.clear_session()
 
+  def get_eval(self, seqs, mode):
+    """Get evaluation data.
+
+    This loads the `evaluation.json` file in the model folder with the evaluation results for the
+    trained models. It fails if these have not been generated.
+
+    Args:
+      * `seqs`: A list of keras Sequences as data generator (`bca.dataset.SeqGen`); each element of the list
+        is assumed to be a pair of a training and test sequence (set the 2nd to None for no test sequence).
+      * `mode`: "last" or "best" to decide which model to evaluate on (we generally assume "best")
+    """
+    res = []
+    for k,seq in enumerate(seqs):
+      print(f"* Fold {k+1}")
+      res.append(self._get_eval_model(seq[0], seq[1], mode))
+    return res
+
+  def _get_eval_model(self, train_seq, test_seq, mode):
+    # Get evaluation data for model train/test sequence
+    path = self._model_path(train_seq)
+    # Return if model does not exist
+    if not os.path.isdir(os.path.join(path,"last")):
+      raise RuntimeError("Model did not complete training")
+    eval_path = os.path.join(path,mode,"evaluation.json")
+    if not os.path.isfile(eval_path):
+      raise RuntimeError("No evaluation data present")
+    # Check if evaluation is OK or needs updating/is broken
+    with open(eval_path, "r") as f:
+      eval_data = json.load(f)
+    for f in ["train_total", "test_total", "train_per_sample", "test_per_sample", 
+              "train_std_per_sample", "test_std_per_sample"]:
+      if f not in eval_data or len(eval_data[f]) == 0:
+        raise RuntimeError("Evaluation data is incomplete")
+    return eval_data
+
+  def interpreter(self, seq, mode="best", index_image=0, index_layer=0, index_slice=0, vis='CM', layers=None):
+    """Interpret the model based on the data in the given sequence.
+
+    This creates the `evaluation.json` file in the model folder with the evaluation results for the
+    trained model. If the file already exists, it is assumed the evaluation is complete.
+
+    It runs in a separate process such that GPU resources used are cleared after the run.
+
+    Args:
+      * `seq`: Data sequence to interpret.
+      * `mode`: "best" or "last" model to use for interpretation
+      * `index_image`: Sample index in sequence to visualise (only for "HM")
+      * `index_slice`: Slice index for sample to visualise (only for "HM")
+      * `index_layer`: Layer index (only for "HM")
+      * `vis`: Interpretation visualisation: "CM" for confusion matrix; "HM": for GradCam heatmap
+      * `layers`: list of model layers to analyse (only for "HM")
+    """
+    # Run this in separate process so we clear resources afterwards
+    if Cfg.val["multiprocessing"]:
+      try:
+        p = multiprocessing.Process(target=self._interpreter, kwargs={"seq": seq,
+                                                                      "mode": mode,
+                                                                      "index_image": index_image,
+                                                                      "index_slice": index_slice,
+                                                                      "index_layer": index_layer,
+                                                                      "vis": vis,
+                                                                      "layers": layers})
+        p.start()
+        p.join()
+      except:
+        p.kill()
+      if p.exitcode != 0:
+        raise RuntimeError("Process failed")
+    else:
+      self._interpreter(seq, mode, index_image, index_slice, index_layer, vis, layers)
+  
+  def _interpreter(self, seq, mode, index_image, index_slice, index_layer, vis, layers):
+    # Helper method for interpreter multiprocessing
+    # FIXME: should really make this an interactive plot or something like this, but for now this is sufficient.
+    model_path = self._model_path(seq) # Assuming seq is a single data sequence
+    # Return if model does not exist
+    if not os.path.isdir(os.path.join(model_path,"last")):
+      print("Model did not complete training")
+      return
+    if not os.path.isdir(model_path):
+      print("Model not found")
+      return
+    # Get model
+    model_path = os.path.join(model_path, mode)
+    model = tf.keras.models.load_model(model_path, custom_objects=Trainer.custom_objects)
+
+    if vis == 'CM':
+      # Visualise confusion matrices
+      cm = ConfusionMatrices(model=model, seq=seq)
+      _, all_cf = cm.get_all()
+      mn, std = ConfusionMatrices.calculate_mean_std(all_cf)
+      cm.plot_heatmap(mn, 'Mean Confusion Matrix', model_path)
+      cm.plot_heatmap(std, 'Std Deviation Confusion Matrix', model_path)
+    elif vis=='HM':
+      # Visualise heatmap
+      gc_vis = GradCamVisualizer(model=model, seq=seq)
+      gc_vis.visualise(index_image, index_slice, index_layer, layers)
+    else:
+      raise RuntimeError(f"Unknown visualisation mode {vis}")
+
+    # Cleanup
+    tf.keras.backend.clear_session()
+
   def plot_model(self, seq, mode="best", text=False, save_only=False):
     """Plot model.
     
@@ -621,7 +725,7 @@ class Trainer:
         except:
           p.kill()
         if p.exitcode != 0:
-          raise Exception("Process failed")
+          raise RuntimeError("Process failed")
       else:
         self._plot_model(path, seq, mode)
     if not save_only:
@@ -943,7 +1047,7 @@ class Trainer:
         except:
           p.kill()
         if p.exitcode != 0:
-          raise Exception("Prediction process failed")
+          raise RuntimeError("Prediction process failed")
         b.description="Prediction Halted"
         p = None
       btn.on_click(btn_clicked)

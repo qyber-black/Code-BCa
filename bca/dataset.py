@@ -88,7 +88,7 @@ class Dataset:
     elif self.crops_type == "bb" or self.crops_type == "orig":
       data_cache = self.crops_type
     else:
-      raise Exception(f"Unknown crop type {self.crops_type}")
+      raise RuntimeError(f"Unknown crop type {self.crops_type}")
     cache = os.path.join(self.cache, f"voxel_counts_{data_cache}.csv")
     voxel_labels = [None] * len(self)
     voxel_counts = [None] * len(self)
@@ -126,7 +126,7 @@ class Dataset:
           elif self.crops_type == "bb":
             crp = self.crops[k]
           else:
-            raise Exception(f"Illegal crops {self.crops_type}")
+            raise RuntimeError(f"Illegal crops {self.crops_type}")
           data = data.slicer[crp[1][0]:crp[1][1],crp[0][0]:crp[0][1],crp[2][0]:crp[2][1]]
         data = data.get_fdata()
         labels, label_counts = np.unique(data, return_counts=True)
@@ -226,7 +226,7 @@ class Dataset:
         elif self.crops_type == "bb":
           crp = self.crops[idx]
         else:
-          raise Exception(f"Illegal crops {self.crops_type}")
+          raise RuntimeError(f"Illegal crops {self.crops_type}")
         data[c] = data[c].slicer[crp[0][0]:crp[0][1],crp[1][0]:crp[1][1],crp[2][0]:crp[2][1]]
     return data
 
@@ -256,7 +256,7 @@ class Dataset:
     """Interactive widget to browse data in notebooks.
     """
     if len(self) < 1:
-      raise Exception("Dataset empty")
+      raise RuntimeError("Dataset empty")
     from IPython.display import display, clear_output
     import matplotlib.pyplot as plt
     from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -312,7 +312,7 @@ class Dataset:
                                        linewidth=1, edgecolor='r', facecolor='none')
               ax[k].add_patch(rect)
           else:
-            raise Exception(f"Illegal crops {self.crops_type}")
+            raise RuntimeError(f"Illegal crops {self.crops_type}")
         ax[k].set_title(self.patients[idx-1]+"-"+c)
       plt.tight_layout()
       plt.show()
@@ -411,7 +411,7 @@ class Dataset:
     elif self.crops_type == "bb" or self.crops_type == "orig":
       data_cache = self.crops_type
     else:
-      raise Exception(f"Illegal crops {self.crops_type}")
+      raise RuntimeError(f"Illegal crops {self.crops_type}")
     data_cache = os.path.join(self.cache, data_cache+"-"+"_".join([str(d) for d in dim])+"-"+("none" if pre_proc is None  else pre_proc.__name__))
     os.makedirs(data_cache, exist_ok=True)
 
@@ -474,7 +474,7 @@ class Dataset:
       np.random.default_rng(seed=seed).shuffle(idx)
       self.set = np.floor(idx % k).astype(np.uint8)
     else:
-      raise Exception(f"Illegal k: {k}")
+      raise RuntimeError(f"Illegal k: {k}")
 
   def _create_sample(self, pidx, dim, pre_proc, data_cache, seg_mask):
     # Create single input/output sample in cache
@@ -499,7 +499,7 @@ class Dataset:
         elif self.crops_type == "bb":
           crp = self.crops[pidx]
         else:
-          raise Exception(f"Illegal crops {self.crops_type}")
+          raise RuntimeError(f"Illegal crops {self.crops_type}")
         stack = data[c].slicer[crp[1][0]:crp[1][1],crp[0][0]:crp[0][1],crp[2][0]:crp[2][1]]
         vs = stack.header.get_zooms()
         sx = (crp[1][1] - crp[1][0]) * vs[0] / dim[0]

@@ -35,7 +35,7 @@ class Cfg:
     The constructor of the `Cfg` class should never be called as it hold all values in the class. Use the
     static methods of the class only.
     """
-    raise Exception("Tried to create a Cfg objects; values should only be held in the class")
+    raise RuntimeError("Tried to create a Cfg objects; values should only be held in the class")
 
   # Log levels
   Error = 1
@@ -154,7 +154,7 @@ class Cfg:
               Cfg.val[k] = js[k]
             else:
               if fc != root_cfg_file: # We fix this here later
-                raise Exception(f"Unknown config file entry {k} in {fc}")
+                raise RuntimeError(f"Unknown config file entry {k} in {fc}")
     # Setup plot defaults
     if Cfg.val["screen_dpi"] == None:
       Cfg.val["screen_dpi"] = Cfg._screen_dpi()

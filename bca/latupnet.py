@@ -75,7 +75,7 @@ class LATUPNet(ModelGen):
       num_classes = seq[-1] # Last element of tuple is number of classes
     else:
       if len(seq.cache.inp_chs) != 1 or len(seq.cache.out_chs) != 1:
-        raise Exception("Invalid input/output numbers")
+        raise RuntimeError("Invalid input/output numbers")
       inputs = Input(shape=(*seq.dim,len(seq.cache.inp_chs[0])),batch_size=batch_size if self.fixed_batch_size else None, name='input_layer')
       num_classes = len(seq.cache.out_chs[0]) # Determine classes from output shape
 
@@ -224,7 +224,7 @@ class LATUPNet(ModelGen):
     elif self.attention == "multimodal":
       return self._att_multimodal(x, name)
     if self.attention is not None and self.attention != "None":
-      raise Exception(f"Unknown attention module {self.attention}")
+      raise RuntimeError(f"Unknown attention module {self.attention}")
     return x
 
   # Squeeze and excitation attention
